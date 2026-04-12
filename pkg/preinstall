@@ -1,0 +1,6 @@
+#!/bin/bash
+# Stop running instances before upgrade
+pkill -f "Zero.app/Contents/MacOS/Zero" 2>/dev/null || true
+pkill -f "/usr/local/bin/mihomo -d" 2>/dev/null || true
+sleep 1
+exit 0
