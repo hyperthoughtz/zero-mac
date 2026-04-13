@@ -1,0 +1,71 @@
+#!/bin/bash
+set -e
+
+LOG="/tmp/zero-install.log"
+exec > "$LOG" 2>&1
+
+log() { echo "$(date '+%H:%M:%S') $1"; }
+
+SHARE="/usr/local/share/mihomo"
+APP="/Applications/Zero.app"
+
+# Verify critical files exist
+if [ ! -f /usr/local/bin/mihomo ]; then
+    log "ERROR: mihomo binary not found"
+    exit 1
+fi
+if [ ! -d "$APP" ]; then
+    log "ERROR: Zero.app not found at $APP"
+    exit 1
+fi
+
+# Ensure log dir
+mkdir -p /usr/local/var/log
+
+# Find console user
+CONSOLE_USER=$(stat -f "%Su" /dev/console 2>/dev/null || echo "")
+[ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ] && \
+    CONSOLE_USER=$(ls -l /dev/console | awk '{print $3}')
+USER_HOME=$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')
+
+log "Console user: $CONSOLE_USER, home: $USER_HOME"
+
+if [ -z "$USER_HOME" ]; then
+    log "ERROR: could not determine console user home directory"
+    exit 1
+fi
+
+CONFDIR="$USER_HOME/.config/mihomo"
+mkdir -p "$CONFDIR"
+
+# Config: create from template if not exists
+if [ ! -f "$CONFDIR/config.yaml" ]; then
+    SECRET=$(openssl rand -hex 16)
+    sed "s|\${SECRET}|$SECRET|g" "$SHARE/config.yaml.template" > "$CONFDIR/config.yaml"
+    log "Created config.yaml"
+fi
+
+# Web UI: always update
+rm -rf "$CONFDIR/ui"
+cp -r "$SHARE/ui" "$CONFDIR/ui"
+
+chown -R "$CONSOLE_USER:staff" "$CONFDIR"
+log "Config ready at $CONFDIR"
+
+# Install LaunchDaemon
+PLIST="/Library/LaunchDaemons/com.zero.mihomo.plist"
+launchctl bootout system/com.zero.mihomo 2>/dev/null || true
+sed "s|CONFIG_DIR|$CONFDIR|g" "$SHARE/com.zero.mihomo.plist" > "$PLIST"
+chown root:wheel "$PLIST"
+chmod 644 "$PLIST"
+launchctl bootstrap system "$PLIST"
+log "LaunchDaemon installed and started"
+
+# Add Zero.app to login items
+su "$CONSOLE_USER" -c "osascript -e 'tell application \"System Events\" to make login item at end with properties {path:\"$APP\", hidden:false}' 2>/dev/null" || log "login item already exists or failed"
+
+# Launch Zero.app (menu bar control)
+su "$CONSOLE_USER" -c "open '$APP'" && log "Zero.app launched" || log "Failed to launch Zero.app"
+
+log "Installation complete"
+exit 0
